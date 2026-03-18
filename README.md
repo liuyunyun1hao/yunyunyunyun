@@ -20,26 +20,26 @@
 如果您想把闲置的安卓手机变成随身 API 服务器，请下载并打开 [Termux](https://f-droid.org/packages/com.termux/)，然后依次执行以下步骤：
 
 **1. 准备基础环境**
-\`\`\`bash
+```bash
 pkg update && pkg upgrade -y
 pkg install nodejs git -y
-\`\`\`
+```
 
 **2. 克隆本仓库**
-\`\`\`bash
+```bash
 git clone https://github.com/liuyunyun1hao/yunyunyunyun.git
-\`\`\`
+```
 
 **3. 进入目录并安装依赖**
-\`\`\`bash
+```bash
 cd yunyunyunyun
 npm install
-\`\`\`
+```
 
 **4. 启动网关**
-\`\`\`bash
+```bash
 node proxy.js
-\`\`\`
+```
 > 🎉 看到 `🚀 全栈网关已启动!` 提示后，打开手机浏览器访问 `http://127.0.0.1:3000` 即可进入管理面板！
 
 ## 🔌 客户端配置指南 (以 Chatbox / 酒馆为例)
@@ -53,10 +53,11 @@ node proxy.js
 ⚡ Termux “一键更新并启动” 终极配置
 每次在 Termux 里都要敲 cd yunyunyunyun 然后 git pull 再 node proxy.js 确实很麻烦。我们可以利用 Linux 的快捷命令 (alias) 功能，把它变成一个超级短的命令。
 请在您的 Termux 终端中依次执行以下两行代码（直接复制粘贴并回车）：
-echo "alias upapi='cd ~/yunyunyunyun && git pull && node proxy.js'" >> ~/.bashrc
-source ~/.bashrc
+
+#cd ~/yunyunyunyun && git pull && node proxy.js
 
 配置完成了！ 以后，当您在 GitHub 上修改了代码，或者您刚刚打开 Termux 准备启动服务时，您只需要在键盘上输入这 5 个字母：
-upapi
+
+#upapi
 
 按下回车，它就会瞬间全自动完成：进入文件夹 -> 自动拉取 GitHub 最新代码 -> 启动本地代理服务！

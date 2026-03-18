@@ -23,14 +23,22 @@ function getConfig() {
             if (parsed.pollingLimit) conf.pollingLimit = parsed.pollingLimit;
         } catch (e) {}
     }
-    
-    // 【终极防御】防止用户把本地地址填成了目标 API 导致 504 循环死机
     if (conf.targetApi.includes('127.0.0.1') || conf.targetApi.includes('localhost') || conf.targetApi.includes('0.0.0.0')) {
-        console.log(`\n[警告] 检测到目标地址填成了本地地址，已自动修正为官方接口！\n`);
         conf.targetApi = "https://api.siliconflow.cn";
     }
     return conf;
 }
+
+// 【新增核心修复】智能路径补全拦截器
+// 如果客户端填错了 URL（漏掉了 /v1），系统自动帮它纠正，防止出现 404 HTML 报错
+app.use((req, res, next) => {
+    const apiPaths = ['/chat/completions', '/models', '/embeddings', '/images/generations'];
+    if (apiPaths.some(p => req.url.startsWith(p))) {
+        req.url = '/v1' + req.url;
+        console.log(`[智能纠错] 检测到客户端遗漏路径，已自动补全为: ${req.url}`);
+    }
+    next();
+});
 
 app.use(express.static(__dirname));
 
@@ -71,7 +79,6 @@ app.get(['/v1/models', '/models'], async (req, res) => {
     }
 });
 
-// 【核心修复】前置鉴权与拦截器，拦截无效请求，提供清晰的中文报错
 app.use('/v1', (req, res, next) => {
     if (req.method === 'OPTIONS') return next();
 
@@ -85,24 +92,16 @@ app.use('/v1', (req, res, next) => {
         const token = authHeader.replace('Bearer ', '').trim();
 
         if (token === currentConfig.unifiedKey) {
-            // 使用统一Key，开始找真实Key
             const info = getNextKeyInfo(keys, currentConfig.pollingLimit);
             if (!info || !info.keyObj) {
-                // 如果池子里没 Key 或都失效了，直接报错打回
-                return res.status(401).json({
-                    error: { message: "【本地代理提示】池子中没有可用或参与轮询的 API Key，请去管理面板添加并测活。" }
-                });
+                return res.status(401).json({ error: { message: "【本地代理提示】池子中没有可用或参与轮询的 API Key。" } });
             }
             req.proxyKey = info.keyObj.key;
             req.proxyLog = `[轮询进度 ${info.currentUsage}/${info.limit}次] -> [${info.keyObj.name || '未命名'}]`;
         } else {
-            // 用户填的不是统一Key
             if (!token.startsWith('sk-')) {
-                return res.status(401).json({
-                    error: { message: `【本地代理提示】您在软件里填的 Key 既不是统一Key，也不是有效的硅基流动Key。请检查是否少打或多打了空格。您当前的统一 Key 为：${currentConfig.unifiedKey}` }
-                });
+                return res.status(401).json({ error: { message: `【代理提示】Key无效。您的统一Key为：${currentConfig.unifiedKey}` } });
             }
-            // 直连
             req.proxyKey = token;
             req.proxyLog = `[直连指定] ->`;
         }
@@ -110,7 +109,6 @@ app.use('/v1', (req, res, next) => {
     next();
 });
 
-// 对话代理中间件
 const apiProxy = createProxyMiddleware({
     target: 'https://api.siliconflow.cn', 
     router: () => {

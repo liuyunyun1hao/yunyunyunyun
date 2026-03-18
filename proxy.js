@@ -13,12 +13,11 @@ const KEYS_FILE = path.join(__dirname, 'keys.json');
 const CONFIG_FILE = path.join(__dirname, 'config.json'); 
 // ==========================================
 
-// 读取全局配置，新增 pollingLimit (默认每次换Key)
 function getConfig() {
     if (fs.existsSync(CONFIG_FILE)) {
         try {
             const conf = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (!conf.pollingLimit) conf.pollingLimit = 1; // 兼容旧配置
+            if (!conf.pollingLimit) conf.pollingLimit = 1;
             return conf;
         } catch (e) {}
     }
@@ -27,28 +26,21 @@ function getConfig() {
 
 app.use(express.static(__dirname));
 
-// 全局请求总数计数器
 let totalRequestCount = 0; 
 
-// 【核心升级】带次数限制的轮询算法
 function getNextKeyInfo(keys, limit) {
     const activeKeys = keys.filter(k => k.status === 'valid' && k.isPolling);
     if (activeKeys.length === 0) return null;
 
-    // 算法：向下取整(总请求数 / 限制次数) % 有效Key的数量
     const keyIndex = Math.floor(totalRequestCount / limit) % activeKeys.length;
     const keyObj = activeKeys[keyIndex];
-
-    // 当前是这个Key在这一轮中的第几次调用
     const currentUsage = (totalRequestCount % limit) + 1;
     
-    // 计数器加1，为下一次请求做准备
     totalRequestCount++;
 
     return { keyObj, currentUsage, limit };
 }
 
-// 专属模型拉取通道 (不计入轮询次数)
 app.get(['/v1/models', '/models'], async (req, res) => {
     let keys = [];
     if (fs.existsSync(KEYS_FILE)) keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
@@ -57,7 +49,9 @@ app.get(['/v1/models', '/models'], async (req, res) => {
     if (validKeys.length === 0) return res.status(500).json({ error: "没有有效 API Key" });
     
     const keyToUse = validKeys[0].key; 
-    const targetBase = getConfig().targetApi.replace(/\/$/, '');
+    let targetBase = getConfig().targetApi.replace(/\/+$/, '');
+    // 智能防错：防止用户在配置里手滑多填了 /v1 导致双重 v1
+    if (targetBase.endsWith('/v1')) targetBase = targetBase.slice(0, -3); 
     
     try {
         const response = await fetch(`${targetBase}/v1/models`, {
@@ -71,12 +65,19 @@ app.get(['/v1/models', '/models'], async (req, res) => {
     }
 });
 
-// 对话代理中间件
 const apiProxy = createProxyMiddleware({
-    router: () => getConfig().targetApi.replace(/\/$/, ''),
+    target: 'https://api.siliconflow.cn', // 【Bug 修复核心】补上丢失的默认 target 基础参数！
+    router: () => {
+        let url = getConfig().targetApi.replace(/\/+$/, '');
+        if (url.endsWith('/v1')) url = url.slice(0, -3);
+        return url;
+    },
     changeOrigin: true,
     ws: true,
     onProxyReq: (proxyReq, req, res) => {
+        // 【优化】：忽略浏览器的 OPTIONS 预检请求，防止它悄悄消耗轮询次数
+        if (req.method === 'OPTIONS') return;
+
         let keys = [];
         if (fs.existsSync(KEYS_FILE)) keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
 
@@ -88,7 +89,6 @@ const apiProxy = createProxyMiddleware({
             const token = authHeader.replace('Bearer ', '').trim();
             
             if (token === currentConfig.unifiedKey) {
-                // 执行带次数限制的轮询
                 const info = getNextKeyInfo(keys, currentConfig.pollingLimit);
                 if(info && info.keyObj) {
                     finalKey = info.keyObj.key;
@@ -119,7 +119,6 @@ app.post('/api/keys', (req, res) => {
 
 app.get('/api/config', (req, res) => res.json(getConfig()));
 app.post('/api/config', (req, res) => {
-    // 重置总请求计数，确保修改配置后立刻重新开始计算
     totalRequestCount = 0; 
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(req.body, null, 2), 'utf8');
     res.json({ success: true });
@@ -129,7 +128,9 @@ app.post('/api/check_balance', async (req, res) => {
     const { key } = req.body;
     if (!key) return res.status(400).json({ error: '请提供 Key' });
     
-    const targetBase = getConfig().targetApi.replace(/\/$/, '');
+    let targetBase = getConfig().targetApi.replace(/\/+$/, '');
+    if (targetBase.endsWith('/v1')) targetBase = targetBase.slice(0, -3);
+
     try {
         const response = await fetch(`${targetBase}/v1/user/info`, {
             method: 'GET',
@@ -144,5 +145,5 @@ app.post('/api/check_balance', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     const conf = getConfig();
-    console.log(`\n🚀 全栈网关已启动!\n==================================================\n🌐 管理面板 : http://127.0.0.1:${PORT}\n🔌 API 接口 : http://127.0.0.1:${PORT}/v1\n🔑 统一 Key : ${conf.unifiedKey}\n🔄 轮询频率 : 每个Key连续调用 ${conf.pollingLimit} 次后切换\n==================================================\n`);
+    console.log(`\n🚀 全栈网关已修复并启动!\n==================================================\n🌐 管理面板 : http://127.0.0.1:${PORT}\n🔌 API 接口 : http://127.0.0.1:${PORT}/v1\n🔑 统一 Key : ${conf.unifiedKey}\n🔄 轮询频率 : 每个Key连续调用 ${conf.pollingLimit} 次后切换\n==================================================\n`);
 });

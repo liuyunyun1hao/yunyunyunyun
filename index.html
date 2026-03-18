@@ -8,22 +8,32 @@
     <style>
         body { font-family: "Helvetica Neue",Helvetica,Arial,sans-serif; background-color: #f0f2f5; margin: 0; padding: 10px; }
         #app { max-width: 1200px; margin: 0 auto; }
+        
+        /* 顶部统计卡片 */
         .stat-card { text-align: center; padding: 15px 10px; background: #fff; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 12px 0 rgba(0,0,0,.05);}
         .stat-value { font-size: 24px; font-weight: bold; color: #409EFF; margin-top: 8px; }
-        .action-bar { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; }
-        .action-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;}
+        
+        /* 居中齐平的按钮组 */
+        .action-container { display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 10px 0 20px 0; }
+        .action-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; width: 100%; }
+        /* 统一按钮的基础宽度，让排版更整齐 */
+        .action-row .el-button { margin-left: 0 !important; flex: 1; min-width: 80px; max-width: 120px; display: flex; justify-content: center; }
         
         .keys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; padding-bottom: 20px; }
         .key-card { background: #fff; border-radius: 8px; border: 1px solid #ebeef5; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 12px; transition: all 0.3s; }
         .key-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         .key-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
         
-        /* 自定义名称输入框样式优化 */
         .name-input .el-input__inner { border: none; font-weight: bold; color: #409EFF; font-size: 15px; padding: 0 5px; background: transparent; }
         .name-input .el-input__inner:focus { border: 1px solid #DCDFE6; background: #fff; }
         
-        .key-string { font-family: monospace; font-size: 13px; color: #909399; word-break: break-all; line-height: 1.4; margin-top: 4px; }
+        /* Key 文本与复制按钮同行 */
+        .key-string-wrapper { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+        .key-string { font-family: monospace; font-size: 13px; color: #909399; word-break: break-all; line-height: 1.4; }
         .mask-text { -webkit-text-security: disc; }
+        .copy-btn { padding: 4px !important; font-size: 16px; color: #909399; }
+        .copy-btn:hover { color: #409EFF; }
+        
         .key-stats { display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 10px 12px; border-radius: 6px; }
         .stat-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #606266; }
         .balance-text { font-weight: bold; color: #E6A23C; font-size: 15px; }
@@ -61,18 +71,18 @@
             </el-col>
         </el-row>
 
-        <div class="action-bar">
-            <div class="action-group">
+        <div class="action-container">
+            <div class="action-row">
                 <el-button type="primary" size="small" icon="el-icon-plus" @click="dialogVisible = true">导入 Key</el-button>
                 <el-button type="success" size="small" icon="el-icon-refresh" @click="checkAllBalances" :loading="checkingAll">一键测活</el-button>
-                
+                <el-button type="danger" size="small" icon="el-icon-delete" plain @click="clearAll">清空所有</el-button>
+            </div>
+            <div class="action-row">
                 <el-button type="warning" size="small" plain icon="el-icon-video-play" @click="toggleAllPolling(true)">全开轮询</el-button>
                 <el-button type="info" size="small" plain icon="el-icon-video-pause" @click="toggleAllPolling(false)">全关轮询</el-button>
-                
-                <el-button type="danger" size="small" icon="el-icon-delete" plain @click="clearAll">清空</el-button>
             </div>
-            <div>
-                <el-switch v-model="showKey" active-text="显示明文" inactive-text="隐藏"></el-switch>
+            <div style="margin-top: 5px;">
+                <el-switch v-model="showKey" active-text="显示明文" inactive-text="隐藏密钥"></el-switch>
             </div>
         </div>
     </el-card>
@@ -83,15 +93,18 @@
             <p>暂无 API Key，请点击上方按钮导入</p>
         </div>
 
-        <div class="key-card" v-for="(row, index) in apiKeys" :key="index">
+        <div class="key-card" v-for="row in sortedApiKeys" :key="row.key">
             <div class="key-header">
-                <div style="flex-grow: 1; margin-right: 10px;">
+                <div style="flex-grow: 1; margin-right: 10px; overflow: hidden;">
                     <el-input v-model="row.name" size="mini" class="name-input" placeholder="自定义名称" @change="saveToServer">
                         <i slot="prefix" class="el-input__icon el-icon-edit" style="cursor: pointer;"></i>
                     </el-input>
-                    <div class="key-string" :class="{'mask-text': !showKey}">{{ row.key }}</div>
+                    <div class="key-string-wrapper">
+                        <div class="key-string" :class="{'mask-text': !showKey}">{{ row.key }}</div>
+                        <el-button type="text" icon="el-icon-document-copy" class="copy-btn" title="复制 Key" @click="copyKey(row.key)"></el-button>
+                    </div>
                 </div>
-                <div>
+                <div style="flex-shrink: 0;">
                     <el-tag v-if="row.status === 'valid'" type="success" size="mini" effect="dark">有效</el-tag>
                     <el-tag v-else-if="row.status === 'invalid'" type="danger" size="mini" effect="dark">失效</el-tag>
                     <el-tag v-else-if="row.status === 'checking'" type="warning" size="mini" effect="dark">测活中</el-tag>
@@ -113,7 +126,7 @@
 
             <div class="key-actions">
                 <el-button size="mini" type="primary" plain icon="el-icon-refresh-right" @click="checkSingleBalance(row)">单独更新</el-button>
-                <el-button size="mini" type="danger" plain icon="el-icon-delete" @click="removeKey(index)">删除</el-button>
+                <el-button size="mini" type="danger" plain icon="el-icon-delete" @click="removeKey(row)">删除</el-button>
             </div>
         </div>
     </div>
@@ -151,6 +164,15 @@
             },
             totalBalance() {
                 return this.apiKeys.reduce((sum, k) => sum + (parseFloat(k.balance) || 0), 0);
+            },
+            // 新增：余额升序排列计算属性
+            sortedApiKeys() {
+                return [...this.apiKeys].sort((a, b) => {
+                    // 如果余额为空(比如没测活或失效)，将其视作 -1，排在最上方引起注意
+                    let balA = a.balance !== null ? parseFloat(a.balance) : -1;
+                    let balB = b.balance !== null ? parseFloat(b.balance) : -1;
+                    return balA - balB; // 升序：小的在前
+                });
             }
         },
         mounted() {
@@ -161,8 +183,6 @@
                 try {
                     const res = await fetch('/api/keys');
                     const data = await res.json();
-                    
-                    // 【兼容老数据】如果旧的 Key 没有 name 属性，给它自动生成一个 "Key X"
                     data.forEach((k, index) => {
                         if (!k.name) k.name = `Key ${index + 1}`;
                     });
@@ -190,7 +210,7 @@
                 keys.forEach(key => {
                     if (!this.apiKeys.find(k => k.key === key)) {
                         this.apiKeys.push({ 
-                            name: `Key ${this.apiKeys.length + 1}`, // 默认按顺序命名
+                            name: `Key ${this.apiKeys.length + 1}`, 
                             key: key, 
                             status: 'unknown', 
                             balance: null, 
@@ -205,10 +225,13 @@
                 this.newKeysText = '';
                 this.$message.success(`成功添加 ${added} 个新密钥`);
             },
-            removeKey(index) {
-                this.apiKeys.splice(index, 1);
-                // 删除后也可以选择重新排序命名，但为了防止弄混，这里保留原有的名称
-                this.saveToServer();
+            removeKey(row) {
+                // 排序后 index 会改变，所以直接通过对象引用寻找真实的 index
+                const realIndex = this.apiKeys.indexOf(row);
+                if (realIndex > -1) {
+                    this.apiKeys.splice(realIndex, 1);
+                    this.saveToServer();
+                }
             },
             clearAll() {
                 if(confirm('确定清空所有密钥吗？')) {
@@ -216,13 +239,10 @@
                     this.saveToServer();
                 }
             },
-            // 新增：一键开启或关闭轮询状态
             toggleAllPolling(state) {
                 let changed = 0;
                 this.apiKeys.forEach(k => {
-                    // 如果要开启轮询，但该 Key 已经失效，则跳过
                     if (state && k.status === 'invalid') return;
-                    
                     if (k.isPolling !== state) {
                         k.isPolling = state;
                         changed++;
@@ -275,6 +295,31 @@
                 }
                 this.checkingAll = false;
                 this.$message.success('更新完毕');
+            },
+            // 新增：一键复制到剪贴板功能
+            copyKey(text) {
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        this.$message.success('Key 已复制到剪贴板');
+                    }).catch(() => {
+                        this.$message.error('复制失败，请手动长按复制');
+                    });
+                } else {
+                    // 兼容旧版浏览器或非 HTTPS 环境
+                    let textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    textArea.style.position = "absolute";
+                    textArea.style.opacity = 0;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        this.$message.success('Key 已复制到剪贴板');
+                    } catch (err) {
+                        this.$message.error('复制失败');
+                    }
+                    document.body.removeChild(textArea);
+                }
             }
         }
     });

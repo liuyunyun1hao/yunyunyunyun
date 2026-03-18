@@ -12,7 +12,7 @@ const path = require('path');
 
 // ================= 配置区 =================
 const LOCAL_PORT = 8080;
-const MAX_REQUESTS_PER_KEY = 5;        // 每个 Key 连续处理的消息数（可自定义）
+const MAX_REQUESTS_PER_KEY = 5;        // 每个 Key 连续处理的消息数
 const DATA_FILE = './keys-data.json';
 const DEFAULT_TARGET_API = 'https://api.siliconflow.cn';
 
@@ -49,7 +49,7 @@ function saveData() {
 }
 loadData();
 
-// ================= 轮询逻辑（动态过滤可用 Key） =================
+// ================= 轮询逻辑 =================
 function getNextKey() {
     const availableKeys = apiKeys.filter(k => k.status === 'valid' && k.isPolling === true);
     if (availableKeys.length === 0) {
@@ -90,6 +90,72 @@ function maskKey(key) {
     if (!key) return '';
     if (key.length <= 10) return key;
     return key.substring(0, 6) + '****' + key.substring(key.length - 4);
+}
+
+// ================= 余额查询（增强版） =================
+function checkBalance(apiKey) {
+    return new Promise((resolve, reject) => {
+        // 尝试多个可能的余额接口路径
+        const paths = ['/v1/user/balance', '/v1/users/balance', '/v1/dashboard/balance'];
+        let attempts = 0;
+
+        const tryPath = (index) => {
+            if (index >= paths.length) {
+                reject(new Error('所有余额接口尝试均失败，请检查网络或Key有效性'));
+                return;
+            }
+            const path = paths[index];
+            const options = {
+                hostname: 'api.siliconflow.cn',
+                path: path,
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${apiKey}` },
+                timeout: 10000 // 10秒超时
+            };
+
+            console.log(`尝试查询余额：${path}`);
+            const req = https.get(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    if (res.statusCode !== 200) {
+                        console.log(`   ${path} 返回 HTTP ${res.statusCode}，响应体: ${data.substring(0,200)}`);
+                        tryPath(index + 1);
+                        return;
+                    }
+                    try {
+                        const json = JSON.parse(data);
+                        // 兼容多种字段格式
+                        const balance = json.balance 
+                                    || json.data?.balance 
+                                    || json.totalBalance 
+                                    || json.data?.totalBalance 
+                                    || 0;
+                        console.log(`✅ 余额查询成功：${balance}`);
+                        resolve(parseFloat(balance).toFixed(4));
+                    } catch (e) {
+                        console.log(`   解析响应失败: ${e.message}，原始数据: ${data.substring(0,200)}`);
+                        tryPath(index + 1);
+                    }
+                });
+            });
+
+            req.on('error', (err) => {
+                console.log(`   ${path} 请求错误: ${err.message}`);
+                tryPath(index + 1);
+            });
+
+            req.on('timeout', () => {
+                req.destroy();
+                console.log(`   ${path} 超时`);
+                tryPath(index + 1);
+            });
+
+            req.end();
+        };
+
+        tryPath(0);
+    });
 }
 
 // ================= 管理 API 处理 =================
@@ -160,9 +226,10 @@ async function handleManageAPI(req, res, body) {
             res.end(JSON.stringify({
                 code: 20000,
                 status: true,
-                data: { totalBalance: balance }   // 兼容前端期望的 data.totalBalance
+                data: { totalBalance: balance }
             }));
         } catch (err) {
+            console.error('余额查询失败:', err.message);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 code: 50000,
@@ -173,39 +240,7 @@ async function handleManageAPI(req, res, body) {
         return;
     }
 
-    return null; // 不是管理 API，继续处理为代理请求
-}
-
-// 改进的余额查询函数（处理非200状态码，解析官方返回格式）
-function checkBalance(apiKey) {
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: 'api.siliconflow.cn',
-            path: '/v1/user/balance',      // 官方余额接口路径
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${apiKey}` }
-        };
-        const req = https.get(options, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                if (res.statusCode !== 200) {
-                    reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-                    return;
-                }
-                try {
-                    const json = JSON.parse(data);
-                    // 官方返回格式：{ "balance": 100.00 }
-                    const balance = json.balance || 0;
-                    resolve(parseFloat(balance).toFixed(4));
-                } catch (e) {
-                    reject(new Error('解析余额失败：' + e.message));
-                }
-            });
-        });
-        req.on('error', reject);
-        req.end();
-    });
+    return null; // 不是管理 API
 }
 
 // ================= 代理请求处理 =================

@@ -14,6 +14,7 @@
         .action-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; width: 100%; }
         .action-row .el-button { margin-left: 0 !important; flex: 1; min-width: 80px; max-width: 120px; display: flex; justify-content: center; }
         
+        /* 布局与卡片样式 */
         .keys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; padding-bottom: 20px; }
         .key-card { background: #fff; border-radius: 8px; border: 1px solid #ebeef5; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 12px; transition: all 0.3s; }
         .key-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
@@ -30,6 +31,7 @@
         .balance-text { font-weight: bold; color: #E6A23C; font-size: 15px; }
         .key-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: auto; }
         .empty-state { grid-column: 1 / -1; text-align: center; padding: 40px; color: #909399; background: #fff; border-radius: 8px; }
+        
         .setting-desc { font-size: 12px; color: #909399; margin-top: 5px; line-height: 1.4; }
     </style>
 </head>
@@ -39,7 +41,7 @@
     <el-card shadow="never" style="border-radius: 8px; margin-bottom: 15px;">
         <div slot="header" style="display: flex; justify-content: space-between; align-items: center;">
             <span style="font-size: 18px; font-weight: bold;">API 密钥本地网关</span>
-            <el-tag type="primary" size="small" style="cursor: pointer; font-size: 13px; padding: 0 10px;" @click="configDialogVisible = true">
+            <el-tag type="success" size="small" style="cursor: pointer;" @click="configDialogVisible = true">
                 <i class="el-icon-setting"></i> 网关配置
             </el-tag>
         </div>
@@ -111,26 +113,20 @@
         </span>
     </el-dialog>
 
-    <el-dialog title="⚙️ 网关全局配置" :visible.sync="configDialogVisible" width="min(90%, 500px)">
+    <el-dialog title="⚙️ 网关全局设置" :visible.sync="configDialogVisible" width="min(90%, 500px)">
         <el-form label-position="top" size="small">
             <el-form-item label="🔑 自定义统一 Key (对外使用的虚拟 Key)">
                 <el-input v-model="sysConfig.unifiedKey" placeholder="例如: sk-my-secret-key"></el-input>
-                <div class="setting-desc">当您在聊天软件中填入此 Key 时，网关会自动将请求轮询分发给下方的真实有效 Key。</div>
+                <div class="setting-desc">当您在 Chatbox 等软件中填入此 Key 时，网关会自动将请求轮询分发给下方真实的有效 Key。</div>
             </el-form-item>
-            
-            <el-form-item label="🎯 目标官方 API 地址">
+            <el-form-item label="🎯 目标官方 API 地址 (底层真实请求地址)">
                 <el-input v-model="sysConfig.targetApi" placeholder="例如: https://api.siliconflow.cn"></el-input>
-                <div class="setting-desc">通常保持默认。</div>
-            </el-form-item>
-            
-            <el-form-item label="🔄 单个 Key 连续调用次数 (1 ~ 20次)">
-                <el-slider v-model="sysConfig.pollingLimit" :min="1" :max="20" show-input></el-slider>
-                <div class="setting-desc">每次轮询时，当前 Key 连续处理多少条请求后才切换到下一个 Key。默认为 1（每次请求都换）。当您希望同一个 Key 保持处理几轮对话时，可调大此数值。</div>
+                <div class="setting-desc">通常保持默认。如果官方接口更改或您想代理其他 OpenAI 格式接口，可在此修改。</div>
             </el-form-item>
         </el-form>
         <span slot="footer">
             <el-button size="small" @click="configDialogVisible = false">取 消</el-button>
-            <el-button size="small" type="primary" @click="saveConfigToServer">保存并生效</el-button>
+            <el-button size="small" type="primary" @click="saveConfigToServer">保存设置</el-button>
         </span>
     </el-dialog>
 </div>
@@ -151,8 +147,7 @@
                 showKey: false,
                 sysConfig: {
                     unifiedKey: '',
-                    targetApi: '',
-                    pollingLimit: 1
+                    targetApi: ''
                 }
             }
         },
@@ -173,27 +168,28 @@
             this.loadConfigFromServer();
         },
         methods: {
+            // 加载与保存 Config
             async loadConfigFromServer() {
                 try {
                     const res = await fetch('/api/config');
-                    const config = await res.json();
-                    if (!config.pollingLimit) config.pollingLimit = 1; // 兼容处理
-                    this.sysConfig = config;
+                    this.sysConfig = await res.json();
                 } catch(e) { console.error('加载配置失败'); }
             },
             async saveConfigToServer() {
                 try {
+                    // 去除 targetApi 末尾可能存在的斜杠
                     this.sysConfig.targetApi = this.sysConfig.targetApi.replace(/\/$/, '');
                     await fetch('/api/config', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(this.sysConfig)
                     });
-                    this.$message.success('配置已保存并立即生效');
+                    this.$message.success('配置已保存并生效');
                     this.configDialogVisible = false;
                 } catch(e) { this.$message.error('配置保存失败'); }
             },
 
+            // 加载与保存 Keys
             async loadFromServer() {
                 try {
                     const res = await fetch('/api/keys');
@@ -211,42 +207,86 @@
                     });
                 } catch (e) { this.$message.error('保存失败'); }
             },
+            
+            // 强化去重逻辑的添加方法
             addKeys() {
                 const keys = this.newKeysText.split('\n').map(k => k.trim()).filter(k => k);
                 if (keys.length === 0) return;
-                let added = 0; let skipped = 0;
+                
+                let added = 0;
+                let skipped = 0;
                 keys.forEach(key => {
                     if (!this.apiKeys.find(k => k.key === key)) {
-                        this.apiKeys.push({ name: `Key ${this.apiKeys.length + 1}`, key: key, status: 'unknown', balance: null, isPolling: true });
+                        this.apiKeys.push({ 
+                            name: `Key ${this.apiKeys.length + 1}`, 
+                            key: key, 
+                            status: 'unknown', 
+                            balance: null, 
+                            isPolling: true 
+                        });
                         added++;
-                    } else { skipped++; }
+                    } else {
+                        skipped++;
+                    }
                 });
-                this.saveToServer(); this.dialogVisible = false; this.newKeysText = '';
-                if (skipped > 0) this.$message.success(`新增 ${added} 个，跳过 ${skipped} 个重复项`);
-                else this.$message.success(`成功添加 ${added} 个新密钥`);
-            },
-            deduplicateKeys() {
-                const uniqueKeys = []; const seen = new Set(); let removed = 0;
-                for (const item of this.apiKeys) {
-                    if (seen.has(item.key)) removed++;
-                    else { seen.add(item.key); uniqueKeys.push(item); }
+                
+                this.saveToServer();
+                this.dialogVisible = false;
+                this.newKeysText = '';
+                if (skipped > 0) {
+                    this.$message.success(`导入完成: 新增 ${added} 个，跳过 ${skipped} 个重复 Key`);
+                } else {
+                    this.$message.success(`成功添加 ${added} 个新密钥`);
                 }
-                if (removed > 0) { this.apiKeys = uniqueKeys; this.saveToServer(); this.$message.success(`清理了 ${removed} 个重复 Key`); } 
-                else { this.$message.info('没有发现重复的 Key'); }
             },
+            
+            // 新增：一键深度去重功能
+            deduplicateKeys() {
+                const uniqueKeys = [];
+                const seen = new Set();
+                let removed = 0;
+                
+                for (const item of this.apiKeys) {
+                    if (seen.has(item.key)) {
+                        removed++;
+                    } else {
+                        seen.add(item.key);
+                        uniqueKeys.push(item);
+                    }
+                }
+                
+                if (removed > 0) {
+                    this.apiKeys = uniqueKeys;
+                    this.saveToServer();
+                    this.$message.success(`扫描完毕！成功清理了 ${removed} 个重复的 Key`);
+                } else {
+                    this.$message.info('池子里非常干净，没有发现重复的 Key');
+                }
+            },
+
             removeKey(row) {
                 const realIndex = this.apiKeys.indexOf(row);
-                if (realIndex > -1) { this.apiKeys.splice(realIndex, 1); this.saveToServer(); }
+                if (realIndex > -1) {
+                    this.apiKeys.splice(realIndex, 1);
+                    this.saveToServer();
+                }
             },
-            clearAll() { if(confirm('确定清空所有密钥吗？')) { this.apiKeys = []; this.saveToServer(); } },
+            clearAll() {
+                if(confirm('确定清空所有密钥吗？')) {
+                    this.apiKeys = [];
+                    this.saveToServer();
+                }
+            },
             toggleAllPolling(state) {
                 let changed = 0;
                 this.apiKeys.forEach(k => {
                     if (state && k.status === 'invalid') return;
                     if (k.isPolling !== state) { k.isPolling = state; changed++; }
                 });
-                if (changed > 0) { this.saveToServer(); this.$message.success(`已${state ? '开启' : '关闭'}所有可用 Key 轮询`); } 
-                else { this.$message.info('目前没有状态需要改变'); }
+                if (changed > 0) {
+                    this.saveToServer();
+                    this.$message.success(`已${state ? '开启' : '关闭'}所有可用 Key 的轮询`);
+                } else { this.$message.info('目前没有状态需要改变'); }
             },
             async checkSingleBalance(row) {
                 row.status = 'checking';
@@ -260,8 +300,11 @@
                         const resData = await response.json();
                         if (resData.code === 20000 && resData.status === true) {
                             let bal = resData.data?.totalBalance || resData.data?.balance || resData.balance || 0;
-                            row.balance = parseFloat(bal).toFixed(4); row.status = 'valid';
-                        } else { row.status = 'invalid'; row.balance = null; row.isPolling = false; }
+                            row.balance = parseFloat(bal).toFixed(4);
+                            row.status = 'valid';
+                        } else {
+                            row.status = 'invalid'; row.balance = null; row.isPolling = false;
+                        }
                     } else { row.status = 'invalid'; row.balance = null; row.isPolling = false; }
                 } catch (error) { row.status = 'invalid'; row.balance = null; row.isPolling = false; }
                 this.saveToServer();
@@ -274,12 +317,13 @@
             },
             copyKey(text) {
                 if (navigator.clipboard && window.isSecureContext) {
-                    navigator.clipboard.writeText(text).then(() => this.$message.success('已复制到剪贴板'));
+                    navigator.clipboard.writeText(text).then(() => this.$message.success('Key 已复制到剪贴板'));
                 } else {
-                    let textArea = document.createElement("textarea"); textArea.value = text;
+                    let textArea = document.createElement("textarea");
+                    textArea.value = text;
                     textArea.style.position = "absolute"; textArea.style.opacity = 0;
                     document.body.appendChild(textArea); textArea.select();
-                    try { document.execCommand('copy'); this.$message.success('已复制到剪贴板'); } 
+                    try { document.execCommand('copy'); this.$message.success('Key 已复制到剪贴板'); } 
                     catch (err) { this.$message.error('复制失败'); }
                     document.body.removeChild(textArea);
                 }

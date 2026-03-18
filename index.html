@@ -11,11 +11,18 @@
         .stat-card { text-align: center; padding: 15px 10px; background: #fff; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 12px 0 rgba(0,0,0,.05);}
         .stat-value { font-size: 24px; font-weight: bold; color: #409EFF; margin-top: 8px; }
         .action-bar { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; }
+        .action-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;}
+        
         .keys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; padding-bottom: 20px; }
         .key-card { background: #fff; border-radius: 8px; border: 1px solid #ebeef5; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 12px; transition: all 0.3s; }
         .key-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         .key-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-        .key-string { font-family: monospace; font-size: 14px; color: #303133; word-break: break-all; line-height: 1.4; }
+        
+        /* 自定义名称输入框样式优化 */
+        .name-input .el-input__inner { border: none; font-weight: bold; color: #409EFF; font-size: 15px; padding: 0 5px; background: transparent; }
+        .name-input .el-input__inner:focus { border: 1px solid #DCDFE6; background: #fff; }
+        
+        .key-string { font-family: monospace; font-size: 13px; color: #909399; word-break: break-all; line-height: 1.4; margin-top: 4px; }
         .mask-text { -webkit-text-security: disc; }
         .key-stats { display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 10px 12px; border-radius: 6px; }
         .stat-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #606266; }
@@ -42,8 +49,8 @@
             </el-col>
             <el-col :xs="24" :sm="8">
                 <div class="stat-card">
-                    <div style="font-size: 14px; color: #606266;">正常 / 参与轮询</div>
-                    <div class="stat-value" style="color: #67C23A;">{{ activePollingCount }}</div>
+                    <div style="font-size: 14px; color: #606266;">参与轮询 / 有效数</div>
+                    <div class="stat-value" style="color: #67C23A;">{{ activePollingCount }} / {{ validCount }}</div>
                 </div>
             </el-col>
             <el-col :xs="24" :sm="8">
@@ -55,9 +62,13 @@
         </el-row>
 
         <div class="action-bar">
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <div class="action-group">
                 <el-button type="primary" size="small" icon="el-icon-plus" @click="dialogVisible = true">导入 Key</el-button>
                 <el-button type="success" size="small" icon="el-icon-refresh" @click="checkAllBalances" :loading="checkingAll">一键测活</el-button>
+                
+                <el-button type="warning" size="small" plain icon="el-icon-video-play" @click="toggleAllPolling(true)">全开轮询</el-button>
+                <el-button type="info" size="small" plain icon="el-icon-video-pause" @click="toggleAllPolling(false)">全关轮询</el-button>
+                
                 <el-button type="danger" size="small" icon="el-icon-delete" plain @click="clearAll">清空</el-button>
             </div>
             <div>
@@ -74,7 +85,12 @@
 
         <div class="key-card" v-for="(row, index) in apiKeys" :key="index">
             <div class="key-header">
-                <div class="key-string" :class="{'mask-text': !showKey}">{{ row.key }}</div>
+                <div style="flex-grow: 1; margin-right: 10px;">
+                    <el-input v-model="row.name" size="mini" class="name-input" placeholder="自定义名称" @change="saveToServer">
+                        <i slot="prefix" class="el-input__icon el-icon-edit" style="cursor: pointer;"></i>
+                    </el-input>
+                    <div class="key-string" :class="{'mask-text': !showKey}">{{ row.key }}</div>
+                </div>
                 <div>
                     <el-tag v-if="row.status === 'valid'" type="success" size="mini" effect="dark">有效</el-tag>
                     <el-tag v-else-if="row.status === 'invalid'" type="danger" size="mini" effect="dark">失效</el-tag>
@@ -127,6 +143,9 @@
             }
         },
         computed: {
+            validCount() {
+                return this.apiKeys.filter(k => k.status === 'valid').length;
+            },
             activePollingCount() {
                 return this.apiKeys.filter(k => k.status === 'valid' && k.isPolling).length;
             },
@@ -141,7 +160,13 @@
             async loadFromServer() {
                 try {
                     const res = await fetch('/api/keys');
-                    this.apiKeys = await res.json();
+                    const data = await res.json();
+                    
+                    // 【兼容老数据】如果旧的 Key 没有 name 属性，给它自动生成一个 "Key X"
+                    data.forEach((k, index) => {
+                        if (!k.name) k.name = `Key ${index + 1}`;
+                    });
+                    this.apiKeys = data;
                 } catch (e) {
                     this.$message.error('无法连接到本地服务');
                 }
@@ -164,7 +189,13 @@
                 let added = 0;
                 keys.forEach(key => {
                     if (!this.apiKeys.find(k => k.key === key)) {
-                        this.apiKeys.push({ key: key, status: 'unknown', balance: null, isPolling: true });
+                        this.apiKeys.push({ 
+                            name: `Key ${this.apiKeys.length + 1}`, // 默认按顺序命名
+                            key: key, 
+                            status: 'unknown', 
+                            balance: null, 
+                            isPolling: true 
+                        });
                         added++;
                     }
                 });
@@ -176,6 +207,7 @@
             },
             removeKey(index) {
                 this.apiKeys.splice(index, 1);
+                // 删除后也可以选择重新排序命名，但为了防止弄混，这里保留原有的名称
                 this.saveToServer();
             },
             clearAll() {
@@ -184,7 +216,26 @@
                     this.saveToServer();
                 }
             },
-            // 【关键修改】调用后端专属的新接口测活
+            // 新增：一键开启或关闭轮询状态
+            toggleAllPolling(state) {
+                let changed = 0;
+                this.apiKeys.forEach(k => {
+                    // 如果要开启轮询，但该 Key 已经失效，则跳过
+                    if (state && k.status === 'invalid') return;
+                    
+                    if (k.isPolling !== state) {
+                        k.isPolling = state;
+                        changed++;
+                    }
+                });
+                
+                if (changed > 0) {
+                    this.saveToServer();
+                    this.$message.success(`已${state ? '开启' : '关闭'}所有可用 Key 的轮询`);
+                } else {
+                    this.$message.info('目前没有状态需要改变');
+                }
+            },
             async checkSingleBalance(row) {
                 row.status = 'checking';
                 try {

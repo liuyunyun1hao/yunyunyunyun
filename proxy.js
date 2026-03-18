@@ -14,21 +14,19 @@ const UNIFIED_KEY = "sk-my-super-local-key";
 const KEYS_FILE = path.join(__dirname, 'keys.json'); 
 // ==========================================
 
-// 1. 提供前端静态页面
 app.use(express.static(__dirname));
 
-// 2. 核心代理与轮询逻辑
 let currentIndex = 0;
 
-function getNextKey(keys) {
+// 【修改】让获取 Key 的函数返回完整的对象，而不仅仅是字符串
+function getNextKeyObj(keys) {
     const activeKeys = keys.filter(k => k.status === 'valid' && k.isPolling);
     if (activeKeys.length === 0) return null;
-    const keyToUse = activeKeys[currentIndex % activeKeys.length].key;
+    const keyObj = activeKeys[currentIndex % activeKeys.length];
     currentIndex++;
-    return keyToUse;
+    return keyObj;
 }
 
-// 【关键修复】代理中间件必须在 express.json() 之前挂载，否则会破坏请求的 Body！
 const apiProxy = createProxyMiddleware({
     target: TARGET_API,
     changeOrigin: true,
@@ -45,8 +43,12 @@ const apiProxy = createProxyMiddleware({
         if (authHeader) {
             const token = authHeader.replace('Bearer ', '').trim();
             if (token === UNIFIED_KEY) {
-                finalKey = getNextKey(keys);
-                if(finalKey) console.log(`[轮询代理] ${req.method} 请求 -> 分配 Key: ${finalKey.substring(0, 8)}***`);
+                const keyObj = getNextKeyObj(keys);
+                if(keyObj) {
+                    finalKey = keyObj.key;
+                    // 【优化日志】打印出你在网页上自定义的名称
+                    console.log(`[轮询] 分配 -> [${keyObj.name || '未命名'}] ${finalKey.substring(0, 8)}***`);
+                }
             } else {
                 finalKey = token;
                 console.log(`[单独调用] 客户端直接指定 Key: ${finalKey.substring(0, 8)}***`);
@@ -63,10 +65,7 @@ const apiProxy = createProxyMiddleware({
     }
 });
 
-// 拦截所有 Chatbox/聊天软件 发来的 /v1 请求
 app.use('/v1', apiProxy);
-
-// 3. 解析器与独立 API 接口 (供我们的 HTML 管理页面调用)
 app.use(express.json({ limit: '5mb' }));
 
 app.get('/api/keys', (req, res) => {
@@ -82,7 +81,6 @@ app.post('/api/keys', (req, res) => {
     res.json({ success: true });
 });
 
-// 【关键新增】完全独立的测活与查余额接口，不经过代理，100% 稳定
 app.post('/api/check_balance', async (req, res) => {
     const { key } = req.body;
     if (!key) return res.status(400).json({ error: '请提供 Key' });

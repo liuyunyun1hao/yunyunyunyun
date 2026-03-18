@@ -14,14 +14,22 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 // ==========================================
 
 function getConfig() {
+    let conf = { unifiedKey: "sk-my-super-local-key", targetApi: "https://api.siliconflow.cn", pollingLimit: 1 };
     if (fs.existsSync(CONFIG_FILE)) {
         try {
-            const conf = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (!conf.pollingLimit) conf.pollingLimit = 1;
-            return conf;
+            const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            if (parsed.unifiedKey) conf.unifiedKey = parsed.unifiedKey.trim();
+            if (parsed.targetApi) conf.targetApi = parsed.targetApi.trim();
+            if (parsed.pollingLimit) conf.pollingLimit = parsed.pollingLimit;
         } catch (e) {}
     }
-    return { unifiedKey: "sk-my-super-local-key", targetApi: "https://api.siliconflow.cn", pollingLimit: 1 };
+    
+    // 【终极防御】防止用户把本地地址填成了目标 API 导致 504 循环死机
+    if (conf.targetApi.includes('127.0.0.1') || conf.targetApi.includes('localhost') || conf.targetApi.includes('0.0.0.0')) {
+        console.log(`\n[警告] 检测到目标地址填成了本地地址，已自动修正为官方接口！\n`);
+        conf.targetApi = "https://api.siliconflow.cn";
+    }
+    return conf;
 }
 
 app.use(express.static(__dirname));
@@ -35,7 +43,6 @@ function getNextKeyInfo(keys, limit) {
     const keyIndex = Math.floor(totalRequestCount / limit) % activeKeys.length;
     const keyObj = activeKeys[keyIndex];
     const currentUsage = (totalRequestCount % limit) + 1;
-    
     totalRequestCount++;
 
     return { keyObj, currentUsage, limit };
@@ -50,7 +57,6 @@ app.get(['/v1/models', '/models'], async (req, res) => {
     
     const keyToUse = validKeys[0].key; 
     let targetBase = getConfig().targetApi.replace(/\/+$/, '');
-    // 智能防错：防止用户在配置里手滑多填了 /v1 导致双重 v1
     if (targetBase.endsWith('/v1')) targetBase = targetBase.slice(0, -3); 
     
     try {
@@ -65,8 +71,48 @@ app.get(['/v1/models', '/models'], async (req, res) => {
     }
 });
 
+// 【核心修复】前置鉴权与拦截器，拦截无效请求，提供清晰的中文报错
+app.use('/v1', (req, res, next) => {
+    if (req.method === 'OPTIONS') return next();
+
+    let keys = [];
+    if (fs.existsSync(KEYS_FILE)) keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
+
+    const currentConfig = getConfig();
+    const authHeader = req.headers.authorization;
+
+    if (authHeader) {
+        const token = authHeader.replace('Bearer ', '').trim();
+
+        if (token === currentConfig.unifiedKey) {
+            // 使用统一Key，开始找真实Key
+            const info = getNextKeyInfo(keys, currentConfig.pollingLimit);
+            if (!info || !info.keyObj) {
+                // 如果池子里没 Key 或都失效了，直接报错打回
+                return res.status(401).json({
+                    error: { message: "【本地代理提示】池子中没有可用或参与轮询的 API Key，请去管理面板添加并测活。" }
+                });
+            }
+            req.proxyKey = info.keyObj.key;
+            req.proxyLog = `[轮询进度 ${info.currentUsage}/${info.limit}次] -> [${info.keyObj.name || '未命名'}]`;
+        } else {
+            // 用户填的不是统一Key
+            if (!token.startsWith('sk-')) {
+                return res.status(401).json({
+                    error: { message: `【本地代理提示】您在软件里填的 Key 既不是统一Key，也不是有效的硅基流动Key。请检查是否少打或多打了空格。您当前的统一 Key 为：${currentConfig.unifiedKey}` }
+                });
+            }
+            // 直连
+            req.proxyKey = token;
+            req.proxyLog = `[直连指定] ->`;
+        }
+    }
+    next();
+});
+
+// 对话代理中间件
 const apiProxy = createProxyMiddleware({
-    target: 'https://api.siliconflow.cn', // 【Bug 修复核心】补上丢失的默认 target 基础参数！
+    target: 'https://api.siliconflow.cn', 
     router: () => {
         let url = getConfig().targetApi.replace(/\/+$/, '');
         if (url.endsWith('/v1')) url = url.slice(0, -3);
@@ -75,34 +121,12 @@ const apiProxy = createProxyMiddleware({
     changeOrigin: true,
     ws: true,
     onProxyReq: (proxyReq, req, res) => {
-        // 【优化】：忽略浏览器的 OPTIONS 预检请求，防止它悄悄消耗轮询次数
-        if (req.method === 'OPTIONS') return;
-
-        let keys = [];
-        if (fs.existsSync(KEYS_FILE)) keys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
-
-        const currentConfig = getConfig();
-        const authHeader = req.headers.authorization;
-        let finalKey = null;
-
-        if (authHeader) {
-            const token = authHeader.replace('Bearer ', '').trim();
-            
-            if (token === currentConfig.unifiedKey) {
-                const info = getNextKeyInfo(keys, currentConfig.pollingLimit);
-                if(info && info.keyObj) {
-                    finalKey = info.keyObj.key;
-                    console.log(`[轮询进度 ${info.currentUsage}/${info.limit}次] -> [${info.keyObj.name || '未命名'}] ${finalKey.substring(0, 8)}***`);
-                }
-            } else {
-                finalKey = token;
-                console.log(`[直连指定] -> Key: ${finalKey.substring(0, 8)}***`);
-            }
+        if (req.proxyKey) {
+            proxyReq.setHeader('Authorization', `Bearer ${req.proxyKey}`);
+            console.log(`${req.proxyLog} ${req.proxyKey.substring(0, 8)}***`);
         }
-
-        if (finalKey) proxyReq.setHeader('Authorization', `Bearer ${finalKey}`);
     },
-    onError: (err, req, res) => res.status(500).json({ error: "本地代理转发失败" })
+    onError: (err, req, res) => res.status(504).json({ error: { message: `本地代理转发失败: ${err.message}` } })
 });
 
 app.use('/v1', apiProxy);
@@ -145,5 +169,5 @@ app.post('/api/check_balance', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     const conf = getConfig();
-    console.log(`\n🚀 全栈网关已修复并启动!\n==================================================\n🌐 管理面板 : http://127.0.0.1:${PORT}\n🔌 API 接口 : http://127.0.0.1:${PORT}/v1\n🔑 统一 Key : ${conf.unifiedKey}\n🔄 轮询频率 : 每个Key连续调用 ${conf.pollingLimit} 次后切换\n==================================================\n`);
+    console.log(`\n🚀 全栈网关已深度修复并启动!\n==================================================\n🌐 管理面板 : http://127.0.0.1:${PORT}\n🔌 API 接口 : http://127.0.0.1:${PORT}/v1\n🔑 统一 Key : ${conf.unifiedKey}\n==================================================\n`);
 });

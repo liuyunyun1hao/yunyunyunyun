@@ -50,14 +50,19 @@ node proxy.js
 
 接下来，尽情享受丝滑的 AI 对话吧！
 
-⚡ Termux “一键更新并启动” 终极配置
+
+## ⚡ Termux “一键更新并启动” 终极配置
 每次在 Termux 里都要敲 cd yunyunyunyun 然后 git pull 再 node proxy.js 确实很麻烦。我们可以利用 Linux 的快捷命令 (alias) 功能，把它变成一个超级短的命令。
 请在您的 Termux 终端中依次执行以下两行代码（直接复制粘贴并回车）：
 
-#cd ~/yunyunyunyun && git pull && node proxy.js
+```bash
+cd ~/yunyunyunyun && git pull && node proxy.js
+```
 
 配置完成了！ 以后，当您在 GitHub 上修改了代码，或者您刚刚打开 Termux 准备启动服务时，您只需要在键盘上输入这 5 个字母：
 
-#upapi
+```bash
+upapi
+```
 
 按下回车，它就会瞬间全自动完成：进入文件夹 -> 自动拉取 GitHub 最新代码 -> 启动本地代理服务！

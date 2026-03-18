@@ -1,18 +1,20 @@
 /**
- * 硅基流动 API 自定义轮询代理脚本（支持动态管理）
+ * 硅基流动 API 自定义轮询代理脚本（集成前端管理界面）
  * 环境要求：已安装 Node.js (无需 npm install 任何依赖)
  * 运行方式：node proxy.js
+ * 访问地址：http://127.0.0.1:8080/
  */
 
 const http = require('http');
 const https = require('https');
-const fs = require('fs'); // 用于持久化存储
+const fs = require('fs');       // 用于文件读写（持久化和提供 index.html）
+const path = require('path');   // 用于处理文件路径
 
 // ================= 1. 配置区 =================
 
 const LOCAL_PORT = 8080;                 // 本地监听端口
-const MAX_REQUESTS_PER_KEY = 5;           // 每个 Key 连续处理的消息数
-const DATA_FILE = './keys-data.json';      // 持久化文件
+const MAX_REQUESTS_PER_KEY = 5;           // 每个 Key 连续处理的消息数（可自定义 1-20）
+const DATA_FILE = './keys-data.json';      // 持久化文件（存储 Keys 和配置）
 
 // 默认目标 API 地址（可从前端配置修改）
 const DEFAULT_TARGET_API = 'https://api.siliconflow.cn';
@@ -288,17 +290,34 @@ function handleProxy(req, res) {
 // ================= 7. 创建 HTTP 服务器 =================
 
 const server = http.createServer((req, res) => {
-    // 统一处理 CORS 预检（OPTIONS 请求由管理 API 处理函数覆盖，但这里也做一次兜底）
+    // 统一设置 CORS 头（对所有响应都有效）
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+    // 处理预检请求
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         return res.end();
     }
 
-    // 收集请求体（可能用于管理 API）
+    // 新增：处理根路径，返回前端管理界面（index.html）
+    if (req.method === 'GET' && req.url === '/') {
+        const filePath = path.join(__dirname, 'index.html');
+        fs.readFile(filePath, (err, data) => {
+            if (err) {
+                console.error('无法读取 index.html:', err);
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end('Internal Server Error - index.html not found');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end(data);
+            }
+        });
+        return; // 直接返回，不再继续处理
+    }
+
+    // 收集请求体（用于管理 API 或代理转发）
     let body = [];
     req.on('data', chunk => body.push(chunk));
     req.on('end', async () => {
@@ -317,8 +336,9 @@ const server = http.createServer((req, res) => {
 
 server.listen(LOCAL_PORT, () => {
     console.log(`\n======================================================`);
-    console.log(`✅ 增强版代理服务已启动`);
+    console.log(`✅ 增强版代理服务已启动（带前端界面）`);
     console.log(`🚀 监听端口: ${LOCAL_PORT}`);
+    console.log(`🌐 访问前端管理页面: http://127.0.0.1:${LOCAL_PORT}/`);
     console.log(`🔑 当前可用 Key 数量: ${apiKeys.filter(k => k.status === 'valid' && k.isPolling).length}`);
     console.log(`⚙️  每个 Key 连续处理 ${MAX_REQUESTS_PER_KEY} 条消息后切换`);
     console.log(`📁 数据持久化文件: ${DATA_FILE}`);

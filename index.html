@@ -8,58 +8,19 @@
     <style>
         body { font-family: "Helvetica Neue",Helvetica,Arial,sans-serif; background-color: #f0f2f5; margin: 0; padding: 10px; }
         #app { max-width: 1200px; margin: 0 auto; }
-        
-        /* 顶部统计卡片 */
         .stat-card { text-align: center; padding: 15px 10px; background: #fff; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 12px 0 rgba(0,0,0,.05);}
         .stat-value { font-size: 24px; font-weight: bold; color: #409EFF; margin-top: 8px; }
-        
-        /* 按钮栏 */
         .action-bar { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; }
-        
-        /* 核心优化：响应式卡片网格布局 */
-        .keys-grid { 
-            display: grid; 
-            /* 手机端最小宽度300px占据1列，电脑端自动排列多列 */
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); 
-            gap: 15px; 
-            padding-bottom: 20px;
-        }
-        
-        /* 独立的密钥卡片样式 */
-        .key-card {
-            background: #fff;
-            border-radius: 8px;
-            border: 1px solid #ebeef5;
-            padding: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            transition: all 0.3s;
-        }
+        .keys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; padding-bottom: 20px; }
+        .key-card { background: #fff; border-radius: 8px; border: 1px solid #ebeef5; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 12px; transition: all 0.3s; }
         .key-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        
-        /* 卡片头部：Key与状态 */
         .key-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
         .key-string { font-family: monospace; font-size: 14px; color: #303133; word-break: break-all; line-height: 1.4; }
         .mask-text { -webkit-text-security: disc; }
-        
-        /* 卡片中部：余额与轮询开关 */
-        .key-stats { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            background: #f8f9fa; 
-            padding: 10px 12px; 
-            border-radius: 6px; 
-        }
+        .key-stats { display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 10px 12px; border-radius: 6px; }
         .stat-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #606266; }
         .balance-text { font-weight: bold; color: #E6A23C; font-size: 15px; }
-        
-        /* 卡片底部：操作按钮 */
         .key-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: auto; }
-        
-        /* 空状态提示 */
         .empty-state { grid-column: 1 / -1; text-align: center; padding: 40px; color: #909399; background: #fff; border-radius: 8px; }
     </style>
 </head>
@@ -182,7 +143,7 @@
                     const res = await fetch('/api/keys');
                     this.apiKeys = await res.json();
                 } catch (e) {
-                    this.$message.error('无法连接到本地服务，请确保后端正在运行');
+                    this.$message.error('无法连接到本地服务');
                 }
             },
             async saveToServer() {
@@ -203,12 +164,7 @@
                 let added = 0;
                 keys.forEach(key => {
                     if (!this.apiKeys.find(k => k.key === key)) {
-                        this.apiKeys.push({
-                            key: key,
-                            status: 'unknown',
-                            balance: null,
-                            isPolling: true
-                        });
+                        this.apiKeys.push({ key: key, status: 'unknown', balance: null, isPolling: true });
                         added++;
                     }
                 });
@@ -228,22 +184,27 @@
                     this.saveToServer();
                 }
             },
+            // 【关键修改】调用后端专属的新接口测活
             async checkSingleBalance(row) {
                 row.status = 'checking';
                 try {
-                    const response = await fetch('/v1/user/info', {
-                        method: 'GET',
-                        headers: {
-                            'Authorization': `Bearer ${row.key}`,
-                            'Content-Type': 'application/json'
-                        }
+                    const response = await fetch('/api/check_balance', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: row.key })
                     });
                     
                     if (response.ok) {
                         const resData = await response.json();
-                        let bal = resData.data?.totalBalance || resData.data?.balance || resData.balance || 0;
-                        row.balance = parseFloat(bal).toFixed(4);
-                        row.status = 'valid';
+                        if (resData.code === 20000 && resData.status === true) {
+                            let bal = resData.data?.totalBalance || resData.data?.balance || resData.balance || 0;
+                            row.balance = parseFloat(bal).toFixed(4);
+                            row.status = 'valid';
+                        } else {
+                            row.status = 'invalid';
+                            row.balance = null;
+                            row.isPolling = false;
+                        }
                     } else {
                         row.status = 'invalid';
                         row.balance = null;

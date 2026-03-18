@@ -12,7 +12,6 @@ const path = require('path');
 
 // ================= 配置区 =================
 const LOCAL_PORT = 8080;
-const MAX_REQUESTS_PER_KEY = 5;        // 每个 Key 连续处理的消息数（可自定义）
 const DATA_FILE = './keys-data.json';
 const DEFAULT_TARGET_API = 'https://api.siliconflow.cn';
 
@@ -20,7 +19,8 @@ const DEFAULT_TARGET_API = 'https://api.siliconflow.cn';
 let apiKeys = [];               // { name, key, status, balance, isPolling }
 let sysConfig = {
     unifiedKey: '',
-    targetApi: DEFAULT_TARGET_API
+    targetApi: DEFAULT_TARGET_API,
+    maxRequestsPerKey: 5        // 默认单个 Key 连续处理 5 条消息
 };
 
 // 轮询状态变量
@@ -33,7 +33,7 @@ function loadData() {
         if (fs.existsSync(DATA_FILE)) {
             const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
             apiKeys = data.apiKeys || [];
-            sysConfig = data.sysConfig || { unifiedKey: '', targetApi: DEFAULT_TARGET_API };
+            sysConfig = { ...sysConfig, ...(data.sysConfig || {}) };
             console.log('📦 已从文件加载数据');
         }
     } catch (err) {
@@ -57,31 +57,33 @@ function getNextKey() {
         return null;
     }
 
+    const maxReqs = sysConfig.maxRequestsPerKey || 5;
     let selectedKey;
+
     if (lastUsedKey) {
         const index = availableKeys.findIndex(k => k.key === lastUsedKey);
         if (index !== -1) {
             currentRequestCount++;
             selectedKey = availableKeys[index];
-            console.log(`[请求到达] 继续使用 Key: ${maskKey(selectedKey.key)} | 进度: ${currentRequestCount}/${MAX_REQUESTS_PER_KEY}`);
+            console.log(`[请求到达] 正在使用 Key: ${maskKey(selectedKey.key)} | 进度: ${currentRequestCount}/${maxReqs}`);
 
-            if (currentRequestCount >= MAX_REQUESTS_PER_KEY) {
+            if (currentRequestCount >= maxReqs) {
                 const nextIndex = (index + 1) % availableKeys.length;
                 lastUsedKey = availableKeys[nextIndex].key;
                 currentRequestCount = 0;
-                console.log(`🔄 达到阈值，切换到下一个 Key: ${maskKey(lastUsedKey)}`);
+                console.log(`🔄 达到设定阈值(${maxReqs}次)，下一次将切换到 Key: ${maskKey(lastUsedKey)}`);
             }
         } else {
             lastUsedKey = availableKeys[0].key;
             currentRequestCount = 1;
             selectedKey = availableKeys[0];
-            console.log(`⚠️ 上次 Key 已失效，重新从第一个可用 Key 开始: ${maskKey(lastUsedKey)}`);
+            console.log(`⚠️ 上次 Key 已失效或被关闭，重新从首个可用 Key 开始: ${maskKey(lastUsedKey)}`);
         }
     } else {
         lastUsedKey = availableKeys[0].key;
         currentRequestCount = 1;
         selectedKey = availableKeys[0];
-        console.log(`🆕 首次使用 Key: ${maskKey(lastUsedKey)}`);
+        console.log(`🆕 首次分配 Key: ${maskKey(lastUsedKey)}`);
     }
     return selectedKey ? selectedKey.key : null;
 }
@@ -92,12 +94,12 @@ function maskKey(key) {
     return key.substring(0, 6) + '****' + key.substring(key.length - 4);
 }
 
-// ================= 改进的余额查询函数（适配硅基流动官方接口） =================
+// ================= 修复版：余额与测活查询 =================
 function checkBalance(apiKey) {
     return new Promise((resolve, reject) => {
         const options = {
             hostname: 'api.siliconflow.cn',
-            path: '/user/info',                     // ✅ 正确的余额信息接口
+            path: '/v1/user/info',                     // 🐛 修复：增加了官方要求的 /v1 路径
             method: 'GET',
             headers: { 'Authorization': `Bearer ${apiKey}` }
         };
@@ -111,7 +113,6 @@ function checkBalance(apiKey) {
                 }
                 try {
                     const json = JSON.parse(data);
-                    // 硅基流动官方返回格式：{ "code": 20000, "data": { "totalBalance": 123.45 } }
                     if (json.code === 20000 && json.data && typeof json.data.totalBalance !== 'undefined') {
                         const balance = json.data.totalBalance;
                         resolve(parseFloat(balance).toFixed(4));
@@ -133,23 +134,20 @@ async function handleManageAPI(req, res, body) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname;
 
-    // 统一 CORS 头
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         return res.end();
     }
 
-    // GET /api/keys
     if (path === '/api/keys' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(apiKeys));
     }
 
-    // POST /api/keys
     if (path === '/api/keys' && req.method === 'POST') {
         try {
             apiKeys = JSON.parse(body);
@@ -160,21 +158,19 @@ async function handleManageAPI(req, res, body) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Invalid JSON' }));
         }
-        return;
+        return true;
     }
 
-    // GET /api/config
     if (path === '/api/config' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(sysConfig));
     }
 
-    // POST /api/config
     if (path === '/api/config' && req.method === 'POST') {
         try {
             const newConfig = JSON.parse(body);
             if (newConfig.targetApi) newConfig.targetApi = newConfig.targetApi.replace(/\/$/, '');
-            sysConfig = newConfig;
+            sysConfig = { ...sysConfig, ...newConfig };
             saveData();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
@@ -182,10 +178,9 @@ async function handleManageAPI(req, res, body) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Invalid JSON' }));
         }
-        return;
+        return true;
     }
 
-    // POST /api/check_balance
     if (path === '/api/check_balance' && req.method === 'POST') {
         try {
             const { key } = JSON.parse(body);
@@ -206,18 +201,18 @@ async function handleManageAPI(req, res, body) {
                 message: err.message
             }));
         }
-        return;
+        return true;
     }
 
-    return null; // 不是管理 API，继续处理为代理请求
+    return false; // 不是管理 API，继续往下走代理逻辑
 }
 
-// ================= 代理请求处理 =================
-function handleProxy(req, res) {
+// ================= 修复版：代理请求处理 =================
+function handleProxy(req, res, rawBodyBuffer) {
     const apiKey = getNextKey();
     if (!apiKey) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'No available API keys' }));
+        return res.end(JSON.stringify({ error: 'No available API keys in polling pool' }));
     }
 
     const targetBase = sysConfig.targetApi || DEFAULT_TARGET_API;
@@ -231,91 +226,87 @@ function handleProxy(req, res) {
         headers: {
             ...req.headers,
             'host': targetUrl.hostname,
-            'authorization': `Bearer ${apiKey}`
+            'authorization': `Bearer ${apiKey}` // 自动替换为池子里的真实 Key
         }
     };
 
     delete options.headers['accept-encoding'];
     delete options.headers['content-length'];
 
-    let body = [];
-    req.on('data', chunk => body.push(chunk));
-    req.on('end', () => {
-        const requestBody = Buffer.concat(body);
-        if (requestBody.length > 0) {
-            options.headers['content-length'] = Buffer.byteLength(requestBody);
-        }
+    if (rawBodyBuffer && rawBodyBuffer.length > 0) {
+        options.headers['content-length'] = Buffer.byteLength(rawBodyBuffer);
+    }
 
-        const proxyReq = https.request(options, (proxyRes) => {
-            const headers = { ...proxyRes.headers };
-            headers['Access-Control-Allow-Origin'] = '*';
-            res.writeHead(proxyRes.statusCode, headers);
-            proxyRes.pipe(res, { end: true });
-        });
-
-        proxyReq.on('error', (err) => {
-            console.error(`❌ 代理请求失败: ${err.message}`);
-            if (!res.headersSent) {
-                res.writeHead(502, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Bad Gateway', details: err.message }));
-            }
-        });
-
-        if (requestBody.length > 0) proxyReq.write(requestBody);
-        proxyReq.end();
+    const proxyReq = https.request(options, (proxyRes) => {
+        const headers = { ...proxyRes.headers };
+        headers['Access-Control-Allow-Origin'] = '*';
+        res.writeHead(proxyRes.statusCode, headers);
+        proxyRes.pipe(res, { end: true });
     });
+
+    proxyReq.on('error', (err) => {
+        console.error(`❌ 代理请求失败: ${err.message}`);
+        if (!res.headersSent) {
+            res.writeHead(502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Bad Gateway', details: err.message }));
+        }
+    });
+
+    // 🐛 修复：直接将主进程收集到的请求体 Buffer 写入代理请求，解决阻塞问题
+    if (rawBodyBuffer && rawBodyBuffer.length > 0) {
+        proxyReq.write(rawBodyBuffer);
+    }
+    proxyReq.end();
 }
 
 // ================= 创建 HTTP 服务器 =================
 const server = http.createServer((req, res) => {
-    // 统一 CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         return res.end();
     }
 
-    // 提供前端页面
     if (req.method === 'GET' && req.url === '/') {
         const filePath = path.join(__dirname, 'index.html');
         fs.readFile(filePath, (err, data) => {
             if (err) {
-                console.error('无法读取 index.html:', err);
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end('Internal Server Error - index.html not found');
             } else {
-                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
                 res.end(data);
             }
         });
         return;
     }
 
-    // 收集请求体
-    let body = [];
-    req.on('data', chunk => body.push(chunk));
+    // 收集完整的请求体 Buffer
+    let bodyChunks = [];
+    req.on('data', chunk => bodyChunks.push(chunk));
     req.on('end', async () => {
-        const fullBody = Buffer.concat(body).toString();
+        const rawBodyBuffer = Buffer.concat(bodyChunks);
+        const fullBodyString = rawBodyBuffer.toString('utf8');
 
-        // 先尝试作为管理 API 处理
-        const handled = await handleManageAPI(req, res, fullBody);
-        if (handled !== null) return;
-
-        // 否则作为代理请求
-        handleProxy(req, res);
+        // 先判断是否是管理面板的请求
+        const isManaged = await handleManageAPI(req, res, fullBodyString);
+        
+        // 如果不是管理面板请求，则透传 Buffer 给代理函数
+        if (!isManaged) {
+            handleProxy(req, res, rawBodyBuffer);
+        }
     });
 });
 
 server.listen(LOCAL_PORT, () => {
     console.log(`\n======================================================`);
-    console.log(`✅ 增强版代理服务已启动（带前端界面）`);
+    console.log(`✅ 硅基流动增强版代理服务已启动（带前端界面）`);
     console.log(`🚀 监听端口: ${LOCAL_PORT}`);
     console.log(`🌐 访问前端管理页面: http://127.0.0.1:${LOCAL_PORT}/`);
-    console.log(`🔑 当前可用 Key 数量: ${apiKeys.filter(k => k.status === 'valid' && k.isPolling).length}`);
-    console.log(`⚙️  每个 Key 连续处理 ${MAX_REQUESTS_PER_KEY} 条消息后切换`);
+    console.log(`⚙️  当前设置每个 Key 轮询处理 ${sysConfig.maxRequestsPerKey} 次`);
     console.log(`📁 数据持久化文件: ${DATA_FILE}`);
     console.log(`======================================================\n`);
 });

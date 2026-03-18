@@ -14,7 +14,6 @@
         .action-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; width: 100%; }
         .action-row .el-button { margin-left: 0 !important; flex: 1; min-width: 80px; max-width: 120px; display: flex; justify-content: center; }
         
-        /* 布局与卡片样式 */
         .keys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; padding-bottom: 20px; }
         .key-card { background: #fff; border-radius: 8px; border: 1px solid #ebeef5; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); display: flex; flex-direction: column; gap: 12px; transition: all 0.3s; }
         .key-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
@@ -119,6 +118,12 @@
                 <el-input v-model="sysConfig.unifiedKey" placeholder="例如: sk-my-secret-key"></el-input>
                 <div class="setting-desc">当您在 Chatbox 等软件中填入此 Key 时，网关会自动将请求轮询分发给下方真实的有效 Key。</div>
             </el-form-item>
+            
+            <el-form-item label="🔄 单个 Key 连续调用次数 (1 - 20次)">
+                <el-input-number v-model="sysConfig.maxRequestsPerKey" :min="1" :max="20"></el-input-number>
+                <div class="setting-desc">设定轮询切换的频率。例如设为 5，则一个 Key 连续回答 5 条消息后才会切换到下一个 Key。</div>
+            </el-form-item>
+
             <el-form-item label="🎯 目标官方 API 地址 (底层真实请求地址)">
                 <el-input v-model="sysConfig.targetApi" placeholder="例如: https://api.siliconflow.cn"></el-input>
                 <div class="setting-desc">通常保持默认。如果官方接口更改或您想代理其他 OpenAI 格式接口，可在此修改。</div>
@@ -147,7 +152,8 @@
                 showKey: false,
                 sysConfig: {
                     unifiedKey: '',
-                    targetApi: ''
+                    targetApi: '',
+                    maxRequestsPerKey: 5  // 新增绑定字段
                 }
             }
         },
@@ -168,16 +174,15 @@
             this.loadConfigFromServer();
         },
         methods: {
-            // 加载与保存 Config
             async loadConfigFromServer() {
                 try {
                     const res = await fetch('/api/config');
-                    this.sysConfig = await res.json();
+                    const config = await res.json();
+                    this.sysConfig = { ...this.sysConfig, ...config };
                 } catch(e) { console.error('加载配置失败'); }
             },
             async saveConfigToServer() {
                 try {
-                    // 去除 targetApi 末尾可能存在的斜杠
                     this.sysConfig.targetApi = this.sysConfig.targetApi.replace(/\/$/, '');
                     await fetch('/api/config', {
                         method: 'POST',
@@ -188,8 +193,6 @@
                     this.configDialogVisible = false;
                 } catch(e) { this.$message.error('配置保存失败'); }
             },
-
-            // 加载与保存 Keys
             async loadFromServer() {
                 try {
                     const res = await fetch('/api/keys');
@@ -207,8 +210,6 @@
                     });
                 } catch (e) { this.$message.error('保存失败'); }
             },
-            
-            // 强化去重逻辑的添加方法
             addKeys() {
                 const keys = this.newKeysText.split('\n').map(k => k.trim()).filter(k => k);
                 if (keys.length === 0) return;
@@ -239,8 +240,6 @@
                     this.$message.success(`成功添加 ${added} 个新密钥`);
                 }
             },
-            
-            // 新增：一键深度去重功能
             deduplicateKeys() {
                 const uniqueKeys = [];
                 const seen = new Set();
@@ -263,7 +262,6 @@
                     this.$message.info('池子里非常干净，没有发现重复的 Key');
                 }
             },
-
             removeKey(row) {
                 const realIndex = this.apiKeys.indexOf(row);
                 if (realIndex > -1) {
